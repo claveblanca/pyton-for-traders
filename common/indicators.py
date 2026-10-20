@@ -1,9 +1,4 @@
-"""common/indicators.py -- indicator maths shared by Ch 8-12 and Appendix A.
-
-All functions take pandas Series/DataFrames and return Series/DataFrames
-aligned to the input index. Wilder smoothing = EMA with alpha = 1/period,
-adjust=False (Ch 11 §11.4 WARNING, Ch 12 §12.4.1).
-"""
+"""Wilder-style indicators for Hands-On scripts."""
 
 from __future__ import annotations
 
@@ -11,99 +6,96 @@ import numpy as np
 import pandas as pd
 
 
-def wilder(s: pd.Series, period: int) -> pd.Series:
-    return s.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+def sma(series: pd.Series, period: int) -> pd.Series:
+    return series.rolling(period, min_periods=period).mean()
 
 
-def ema(s: pd.Series, span: int) -> pd.Series:
-    return s.ewm(span=span, adjust=False).mean()
+def ema(series: pd.Series, period: int) -> pd.Series:
+    return series.ewm(span=period, adjust=False, min_periods=period).mean()
 
 
-def sma(s: pd.Series, window: int) -> pd.Series:
-    return s.rolling(window).mean()
+def _wilder_smooth(x: pd.Series, period: int) -> pd.Series:
+    return x.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
 
 
 def true_range(df: pd.DataFrame) -> pd.Series:
-    pc = df["close"].shift(1)
-    return pd.concat(
-        [df["high"] - df["low"], (df["high"] - pc).abs(), (df["low"] - pc).abs()],
+    prev = df["close"].shift(1)
+    tr = pd.concat(
+        [
+            df["high"] - df["low"],
+            (df["high"] - prev).abs(),
+            (df["low"] - prev).abs(),
+        ],
         axis=1,
     ).max(axis=1)
+    return tr
 
 
 def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
-    return wilder(true_range(df), period)
+    return _wilder_smooth(true_range(df), period)
 
 
 def rsi(close: pd.Series, period: int = 14) -> pd.Series:
-    d = close.diff()
-    g, l = wilder(d.clip(lower=0), period), wilder(-d.clip(upper=0), period)
-    return 100 - 100 / (1 + g / l)
+    delta = close.diff()
+    gain = delta.clip(lower=0)
+    loss = (-delta).clip(lower=0)
+    avg_gain = _wilder_smooth(gain, period)
+    avg_loss = _wilder_smooth(loss, period)
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    return 100 - 100 / (1 + rs)
 
 
-def macd(close: pd.Series, fast=12, slow=26, signal=9) -> pd.DataFrame:
+def macd(close: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> pd.DataFrame:
     line = ema(close, fast) - ema(close, slow)
     sig = ema(line, signal)
-    return pd.DataFrame({"macd": line, "signal": sig, "hist": line - sig})
+    return pd.DataFrame({"macd_line": line, "macd_signal": sig, "macd_hist": line - sig})
 
 
 def adx(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
-    """+DI, -DI, DX, ADX exactly as Ch 12 Listing 12.1."""
     up = df["high"].diff()
-    dn = -df["low"].diff()
-    pdm = up.where((up > dn) & (up > 0), 0.0)
-    mdm = dn.where((dn > up) & (dn > 0), 0.0)
-    a = wilder(true_range(df), period)
-    pdi = 100 * wilder(pdm, period) / a
-    mdi = 100 * wilder(mdm, period) / a
-    dx = 100 * (pdi - mdi).abs() / (pdi + mdi).replace(0, np.nan)
+    down = -df["low"].diff()
+    plus_dm = np.where((up > down) & (up > 0), up, 0.0)
+    minus_dm = np.where((down > up) & (down > 0), down, 0.0)
+    tr = true_range(df)
+    atr_w = _wilder_smooth(tr, period)
+    plus_di = 100 * _wilder_smooth(pd.Series(plus_dm, index=df.index), period) / atr_w
+    minus_di = 100 * _wilder_smooth(pd.Series(minus_dm, index=df.index), period) / atr_w
+    dx = (100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)).fillna(0)
+    adx_line = _wilder_smooth(dx, period)
     return pd.DataFrame(
-        {"plus_di": pdi, "minus_di": mdi, "dx": dx, "adx": wilder(dx, period)}
+        {"adx": adx_line, "plus_di": plus_di, "minus_di": minus_di},
+        index=df.index,
     )
 
 
-def bollinger(close: pd.Series, window=20, k=2.0) -> pd.DataFrame:
-    mid = close.rolling(window).mean()
-    sd = close.rolling(window).std(ddof=0)
-    up, lo = mid + k * sd, mid - k * sd
+def bollinger(close: pd.Series, period: int = 20, k: float = 2.0) -> pd.DataFrame:
+    mid = sma(close, period)
+    std = close.rolling(period, min_periods=period).std()
+    upper = mid + k * std
+    lower = mid - k * std
+    width = (upper - lower) / mid.replace(0, np.nan)
+    pct_b = (close - lower) / (upper - lower).replace(0, np.nan)
     return pd.DataFrame(
         {
             "bb_mid": mid,
-            "bb_upper": up,
-            "bb_lower": lo,
-            "bb_pct_b": (close - lo) / (up - lo),
-            "bb_width": (up - lo) / mid,
+            "bb_upper": upper,
+            "bb_lower": lower,
+            "bb_width": width,
+            "bb_pct_b": pct_b,
         }
     )
-
-
-def stochastic(df: pd.DataFrame, k=14, d=3) -> pd.DataFrame:
-    hh, ll = df["high"].rolling(k).max(), df["low"].rolling(k).min()
-    pk = 100 * (df["close"] - ll) / (hh - ll)
-    return pd.DataFrame(
-        {
-            "stoch_k": pk,
-            "stoch_d": pk.rolling(d).mean(),
-            "williams_r": -100 * (hh - df["close"]) / (hh - ll),
-        }
-    )
-
-
-def cci(df: pd.DataFrame, window=20) -> pd.Series:
-    tp = (df["high"] + df["low"] + df["close"]) / 3
-    ma = tp.rolling(window).mean()
-    md = tp.rolling(window).apply(lambda x: np.mean(np.abs(x - x.mean())), raw=True)
-    return (tp - ma) / (0.015 * md)
-
-
-def obv(df: pd.DataFrame) -> pd.Series:
-    return (np.sign(df["close"].diff().fillna(0)) * df["volume"]).cumsum()
 
 
 def crosses(fast: pd.Series, slow: pd.Series) -> pd.Series:
-    """+1 on a cross above, -1 on a cross below, 0 otherwise."""
-    above = fast > slow
-    prev = above.shift(1, fill_value=False)
-    return (above & ~prev).astype(int) - (
-        ~above & prev & fast.notna() & slow.notna()
-    ).astype(int)
+    """+1 golden cross, -1 death cross, 0 otherwise."""
+    diff = fast - slow
+    prev = diff.shift(1)
+    out = pd.Series(0, index=fast.index, dtype=int)
+    out[(prev <= 0) & (diff > 0)] = 1
+    out[(prev >= 0) & (diff < 0)] = -1
+    return out
+
+
+def obv(df: pd.DataFrame) -> pd.Series:
+    direction = np.sign(df["close"].diff().fillna(0))
+    return (direction * df["volume"]).cumsum()
