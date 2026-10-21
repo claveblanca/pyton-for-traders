@@ -20,7 +20,8 @@ from common import pd, options, closes, show
 def yearly_gap(px: pd.DataFrame) -> dict:
     d = px.tail(252)
     etc_usd = d["etc"] * d["fx"]                            # EUR price x USD per EUR
-    r_etc, r_fut = etc_usd.iloc[-1] / etc_usd.iloc[0] - 1, d["fut"].iloc[-1] / d["fut"].iloc[0] - 1
+    r_etc = etc_usd.iloc[-1] / etc_usd.iloc[0] - 1
+    r_fut = d["fut"].iloc[-1] / d["fut"].iloc[0] - 1
     return {"from": str(d.index[0].date()), "to": str(d.index[-1].date()),
             "etc_return_usd": round(r_etc, 3), "future_return": round(r_fut, 3),
             "gap_per_year": round(r_etc - r_fut, 3)}

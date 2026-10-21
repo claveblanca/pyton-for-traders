@@ -21,13 +21,14 @@ def volume_reading(df, n=20) -> dict:
     o = obv(df)
     px, ov = df.close.tail(n), o.tail(n)
     rel_vol = df.volume.iloc[-1] / df.volume.iloc[-n - 1:-1].mean()
+    down_day = df.close.iloc[-1] < df.close.iloc[-2]
     return {
         "date": str(df.index[-1].date()),
         "obv_trend_20d": "up" if ov.iloc[-1] > ov.iloc[0] else "down",
         "bearish_divergence": bool(px.iloc[-1] >= px.max() and ov.iloc[-1] < ov.max()),
         "bullish_divergence": bool(px.iloc[-1] <= px.min() and ov.iloc[-1] > ov.min()),
         "volume_vs_20d": round(rel_vol, 2),
-        "possible_selling_climax": bool(rel_vol >= 1.5 and df.close.iloc[-1] < df.close.iloc[-2]),
+        "possible_selling_climax": bool(rel_vol >= 1.5 and down_day),
     }
 
 

@@ -21,9 +21,11 @@ def size(df, equity, point_value, risk=0.02, k_atr=2.0, margin=None) -> dict:
     close, a = df["close"].iloc[-1], atr(df).iloc[-1]
     risk_per_contract = k_atr * a * point_value
     n = int(risk * equity // risk_per_contract)
-    out = {"close": round(close, 2), "atr14": round(a, 2), "stop": round(close - k_atr * a, 2),
+    notional = n * close * point_value
+    out = {"close": round(close, 2), "atr14": round(a, 2),
+           "stop": round(close - k_atr * a, 2),
            "risk_per_contract": round(risk_per_contract, 2), "max_contracts": n,
-           "notional": round(n * close * point_value), "leverage": round(n * close * point_value / equity, 2)}
+           "notional": round(notional), "leverage": round(notional / equity, 2)}
     if margin:
         out["margin_used_pct"] = round(100 * n * margin / equity, 1)
     return out

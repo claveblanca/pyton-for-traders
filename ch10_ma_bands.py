@@ -22,14 +22,18 @@ def ma_bands(df) -> dict:
     fast, slow = ema(c, 12), ema(c, 26)
     x = crosses(fast, slow)
     last_x = x[x != 0]
+    cross = "none"
+    if len(last_x):
+        kind = "golden" if last_x.iloc[-1] > 0 else "death"
+        cross = f"{kind} on {last_x.index[-1].date()}"
     bb = bollinger(c).dropna()
     width_rank = (bb.bb_width.tail(120) < bb.bb_width.iloc[-1]).mean()
+    up = fast.iloc[-1] > slow.iloc[-1]
     return {
         "date": str(df.index[-1].date()), "close": round(c.iloc[-1], 2),
-        "trend": "up (EMA12 > EMA26)" if fast.iloc[-1] > slow.iloc[-1] else "down (EMA12 < EMA26)",
-        "last_cross": (f"{'golden' if last_x.iloc[-1] > 0 else 'death'} on {last_x.index[-1].date()}"
-                       if len(last_x) else "none"),
-        "pct_b": round(bb.bb_pct_b.iloc[-1], 2),            # >1 above upper band, <0 below lower
+        "trend": "up (EMA12 > EMA26)" if up else "down (EMA12 < EMA26)",
+        "last_cross": cross,
+        "pct_b": round(bb.bb_pct_b.iloc[-1], 2),       # >1 above upper, <0 below lower
         "squeeze": bool(width_rank <= 0.10),
     }
 

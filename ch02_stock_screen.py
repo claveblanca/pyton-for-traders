@@ -1,7 +1,7 @@
 """ch02_stock_screen.py — Chapter 2 Hands-On: the stock screen on any ticker.
 
 Fetches up to 7 years of annual statements and applies the chapter's filters:
-debt ratio <= 60% of tangible assets, interest coverage >= 3, Cash Flow Index >= 1,
+debt ratio <= 60% of tangible assets, interest coverage >= 3, cash conversion ratio >= 1,
 cycle-average P/E <= 16 (fair price = 16 x average net income per share).
 
 Run from the repo root:
@@ -18,7 +18,7 @@ if str(_ROOT) not in sys.path:
 from common import pd, cli
 from common.stocks_data import live, mock_nvda, screen
 
-COLUMNS = ["ticker", "stage", "debt_ratio", "coverage_7y", "cfi_7y", "cape_pe", "fair_price_16x"]
+COLUMNS = ["ticker", "stage", "debt_ratio", "coverage_7y", "cash_conv_7y", "cape_pe", "fair_price_16x"]
 
 if __name__ == "__main__":
     tickers, demo = cli(["NVDA"])

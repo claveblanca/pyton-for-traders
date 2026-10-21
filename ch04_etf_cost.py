@@ -1,6 +1,6 @@
-"""ch04_etf_cost.py — Chapter 4 Hands-On: the Index of Cost (ICS) of an ETF from a live quote.
+"""ch04_etf_cost.py — Chapter 4 Hands-On: the Round-Trip Cost (RTC) of an ETF from a live quote.
 
-ICS = TER + 2 x spread (one year, % of the amount). Hurdle = the gain a trade must
+RTC = TER + 2 x spread (one year, % of the amount). Hurdle = the gain a trade must
 target to be worth its round trip (5 x the round-trip spread).
 One quote is a snapshot: sample several, at different hours, before you decide.
 
@@ -17,13 +17,14 @@ if str(_ROOT) not in sys.path:
 from common import options, show
 
 
-def ics(ter_pct: float, spread_pct: float) -> float:
-    """Synthetic cost index: TER + 2× one-way spread (% per year)."""
+def rtc(ter_pct: float, spread_pct: float) -> float:
+    """Round-trip cost: TER + 2× one-way spread (% per year)."""
     return ter_pct + 2 * spread_pct
 
 
 def cost_eur(amount: float, ter_pct: float, spread_pct: float, years: float) -> float:
-    return amount * (ics(ter_pct, spread_pct) / 100) * years
+    """Euros paid over `years`: the fee every year, the spread once (buy + sell)."""
+    return amount * (ter_pct * years + 2 * spread_pct) / 100
 
 
 def hurdle(spread_pct: float) -> float:
@@ -43,6 +44,6 @@ def spread_pct(ticker: str) -> float:
 if __name__ == "__main__":
     a = options(["DEMO"], ter=0.38, amount=20000.0, years=5.0)     # ter = yearly fee, %
     s = 0.06 if a.demo else spread_pct(a.symbols[0])
-    show({"spread_pct": round(s, 3), "ics_pct_1y": round(ics(a.ter, s), 2),
+    show({"spread_pct": round(s, 3), "rtc_pct_1y": round(rtc(a.ter, s), 2),
           f"cost_eur_{a.years:g}y": round(cost_eur(a.amount, a.ter, s, a.years)),
           "trade_hurdle_pct": round(hurdle(s), 1)})

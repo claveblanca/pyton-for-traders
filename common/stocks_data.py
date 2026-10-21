@@ -339,7 +339,7 @@ def window(df: pd.DataFrame, years: int) -> pd.DataFrame:
 # --------------------------------------------------------------------------
 # Chapter 2 screen (§2.3–2.4)
 # --------------------------------------------------------------------------
-LIMITS = {"debt_ratio": 0.60, "coverage": 3.0, "cfi": 1.0, "pe_max": 16.0}
+LIMITS = {"debt_ratio": 0.60, "coverage": 3.0, "cash_conv": 1.0, "pe_max": 16.0}
 SCREEN_ANNUAL_FIELDS = [
     "total_assets",
     "total_liabilities",
@@ -360,11 +360,11 @@ def negative_filters(a: pd.DataFrame, years: int = 7) -> dict:
     out = {
         "debt_ratio": last["total_liabilities"] / tangible,
         "coverage_7y": w["ebit"].sum() / w["interest_expense"].sum(),
-        "cfi_7y": w["cfo"].sum() / w["net_income"].sum(),
+        "cash_conv_7y": w["cfo"].sum() / w["net_income"].sum(),
     }
     out["pass_debt"] = out["debt_ratio"] <= LIMITS["debt_ratio"]
     out["pass_coverage"] = out["coverage_7y"] >= LIMITS["coverage"]
-    out["pass_cfi"] = out["cfi_7y"] >= LIMITS["cfi"]
+    out["pass_cash_conv"] = out["cash_conv_7y"] >= LIMITS["cash_conv"]
     return out
 
 
@@ -395,7 +395,7 @@ def value_trap(a: pd.DataFrame) -> dict:
 
 def screen(ticker: str, a: pd.DataFrame, price: float, shares: float) -> dict:
     nf, vt, val = negative_filters(a), value_trap(a), valuation(a, price, shares)
-    if not (nf["pass_debt"] and nf["pass_coverage"] and nf["pass_cfi"]):
+    if not (nf["pass_debt"] and nf["pass_coverage"] and nf["pass_cash_conv"]):
         stage = "rejected_stage_1"
     elif vt["declining"]:
         stage = "watch"

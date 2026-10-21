@@ -18,14 +18,15 @@ if str(_ROOT) not in sys.path:
 from common import pd, cli, daily, show
 
 
-def atm_reading(calls: pd.DataFrame, puts: pd.DataFrame, spot: float, days: int, hv20: float) -> dict:
+def atm_reading(calls, puts, spot: float, days: int, hv20: float) -> dict:
     k = calls.loc[(calls.strike - spot).abs().idxmin(), "strike"]
     c, p = calls[calls.strike == k].iloc[0], puts[puts.strike == k].iloc[0]
     straddle = (c.bid + c.ask) / 2 + (p.bid + p.ask) / 2
     iv = (c.impliedVolatility + p.impliedVolatility) / 2
     return {"strike": k, "days": days, "straddle": round(straddle, 2),
             "expected_move_pct": round(100 * straddle / spot, 1),
-            "iv_atm": round(iv, 3), "hv20": round(hv20, 3), "iv_minus_hv": round(iv - hv20, 3),
+            "iv_atm": round(iv, 3), "hv20": round(hv20, 3),
+            "iv_minus_hv": round(iv - hv20, 3),
             "reading": "rich: sell defined risk" if iv > 1.2 * hv20 else
                        "cheap: buy" if iv < hv20 else "fair"}
 
