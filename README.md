@@ -41,6 +41,12 @@ python ch10_ma_bands.py BTC-USD    # live data (Yahoo Finance; add --kraken in c
 | 11 | `ch11_rsi_macd.py` | RSI zone, MACD histogram turn | `python ch11_rsi_macd.py BTC-USD` | — |
 | 12 | `ch12_adx_gate.py` | ADX regime and which tools may trade | `python ch12_adx_gate.py XLE XLK GLD` | — |
 
+### Appendix B — LLM stock screen
+
+| Script | What it does | Example | Needs |
+|---|---|---|---|
+| `appendixB_stock_screen_llm.py` | JSON profitability + valuation → OpenRouter (DeepSeek) short/medium/long commentary | `python appendixB_stock_screen_llm.py` (reads `data/sample.json`) | `OPENROUTER_API_KEY`; `SEC_USER_AGENT` if fetching a live ticker |
+
 ## Shared code — `common/`
 
 Everything the scripts share is imported from `common` (`from common import cli, daily, show, rsi, ...`):

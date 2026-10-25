@@ -10,6 +10,7 @@ Requires:
 Run from the repo root:
     python ch02_stock_screen.py              # default AAPL
     python ch02_stock_screen.py NVDA MSFT
+    python ch02_stock_screen.py AAPL --years 10
     python ch02_stock_screen.py AAPL --no-yfinance
 """
 from __future__ import annotations
@@ -103,6 +104,12 @@ EDGAR_TAGS: dict[str, list[str]] = {
     "capex_ppe": [
         "us-gaap:PaymentsToAcquirePropertyPlantAndEquipment",
         "ifrs-full:PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities",
+    ],
+    # Not in SEC_FIELDS: used only for historical market cap (unit is shares, not USD).
+    "shares_diluted": [
+        "us-gaap:WeightedAverageNumberOfDilutedSharesOutstanding",
+        "us-gaap:WeightedAverageNumberOfShareOutstandingBasicAndDiluted",
+        "us-gaap:WeightedAverageNumberOfSharesOutstandingBasic",
     ],
 }
 
@@ -201,10 +208,23 @@ VALUATION_HELP: dict[str, tuple[str, str]] = {
     ),
 }
 
+HISTORY_LABELS: dict[str, str] = {
+    "fy_end": "FY end",
+    "price": "Price",
+    "market_cap": "Market cap",
+    "pe": "P/E",
+    "pb": "P/B",
+    "p_cf": "P/CF",
+    "p_fcf": "P/FCF",
+    "ev": "EV",
+    "ev_to_sales": "EV/Sales",
+}
+
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("symbols", nargs="*", default=["AAPL"], help="tickers (default AAPL)")
+    p.add_argument("--years", type=int, default=YEARS, help=f"fiscal years to show (default {YEARS})")
     p.add_argument(
         "--no-yfinance",
         action="store_true",
@@ -236,15 +256,17 @@ def _company_facts(cik: int) -> dict:
     return _sec_get(f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json")
 
 
-def _tag_series(facts: dict, qtag: str) -> pd.Series:
+def _tag_frame(facts: dict, qtag: str) -> pd.DataFrame:
+    """Annual facts for one tag: columns end, filed, val (latest filing per period end)."""
+    empty = pd.DataFrame(columns=["end", "filed", "val"])
     tax, tag = qtag.split(":")
     node = facts.get("facts", {}).get(tax, {}).get(tag)
     if not node:
-        return pd.Series(dtype=float)
+        return empty
     units = node["units"]
     unit = "USD" if "USD" in units else next((u for u in units if "/" not in u), None)
     if unit is None:
-        return pd.Series(dtype=float)
+        return empty
     rows = []
     for f in units[unit]:
         if not str(f.get("form", "")).startswith(("10-K", "20-F", "40-F")):
@@ -256,14 +278,45 @@ def _tag_series(facts: dict, qtag: str) -> pd.Series:
                 continue
         rows.append((end, f.get("filed", ""), float(f["val"])))
     if not rows:
-        return pd.Series(dtype=float)
-    df = (
+        return empty
+    return (
         pd.DataFrame(rows, columns=["end", "filed", "val"])
         .sort_values("filed")
         .drop_duplicates("end", keep="last")
     )
+
+
+def _tag_series(facts: dict, qtag: str) -> pd.Series:
+    df = _tag_frame(facts, qtag)
+    if df.empty:
+        return pd.Series(dtype=float)
     s = df.set_index(df["end"].dt.year)["val"]
     return s.groupby(level=0).last()
+
+
+def _fy_end_dates(facts: dict) -> pd.Series:
+    """Fiscal year label -> balance-sheet date, from the total assets tag."""
+    for qtag in EDGAR_TAGS["total_assets"]:
+        df = _tag_frame(facts, qtag)
+        if not df.empty:
+            return df.groupby(df["end"].dt.year)["end"].max()
+    return pd.Series(dtype="datetime64[ns]")
+
+
+def _shares_frame(facts: dict) -> pd.DataFrame:
+    """Diluted share count per fiscal year plus the filing date it comes from."""
+    frames = []
+    for qtag in EDGAR_TAGS["shares_diluted"]:
+        df = _tag_frame(facts, qtag)
+        if df.empty:
+            continue
+        df = df.assign(filed=pd.to_datetime(df["filed"])).groupby(df["end"].dt.year).last()
+        frames.append(df.rename(columns={"val": "shares_diluted", "filed": "shares_filed"})[
+            ["shares_diluted", "shares_filed"]
+        ])
+    if not frames:
+        return pd.DataFrame(columns=["shares_diluted", "shares_filed"])
+    return pd.concat(frames).groupby(level=0).first()
 
 
 def _field_series(facts: dict, field: str) -> pd.Series:
@@ -277,7 +330,8 @@ def _field_series(facts: dict, field: str) -> pd.Series:
     return out
 
 
-def fetch_annual(ticker: str) -> pd.DataFrame:
+def fetch_annual(ticker: str, years: int = YEARS) -> pd.DataFrame:
+    """SEC_FIELDS per fiscal year, plus fy_end, shares_diluted, shares_filed."""
     cik = _ticker_cik_map().get(ticker.upper())
     if cik is None:
         raise SystemExit(f"{ticker!r} is not in SEC company_tickers (US filer only).")
@@ -286,7 +340,17 @@ def fetch_annual(ticker: str) -> pd.DataFrame:
     df = pd.DataFrame(cols).sort_index().dropna(how="all")
     if df.empty:
         raise SystemExit(f"No SEC annual data returned for {ticker!r}.")
-    return df.tail(YEARS)
+    df = df.join(_shares_frame(facts))
+    df["fy_end"] = _fy_end_dates(facts)
+    return df.tail(years)
+
+
+def screen(ticker: str, years: int = YEARS) -> pd.DataFrame:
+    """Fundamentals + ratios for the last `years` fiscal years.
+
+    Fetches one extra year so ROA (average assets) is defined for the oldest row shown.
+    """
+    return add_ratios(fetch_annual(ticker, years + 1)).tail(years)
 
 
 def add_ratios(df: pd.DataFrame) -> pd.DataFrame:
@@ -305,7 +369,33 @@ def add_ratios(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _ratio(num: float, den: float) -> float | None:
+    if den is None or pd.isna(den) or den == 0:
+        return None
+    return num / den
+
+
+def _multiples(mcap: float, fy: pd.Series) -> dict:
+    """Valuation multiples from a market cap and one fiscal year of fundamentals."""
+    equity = fy.get("equity")
+    if equity is None or pd.isna(equity):
+        equity = fy["total_assets"] - fy["total_liabilities"]
+    cash = fy["cash"] if pd.notna(fy.get("cash")) else 0.0
+    debt = fy["total_debt"] if pd.notna(fy.get("total_debt")) else 0.0
+    ev = mcap + debt - cash
+    return {
+        "market_cap": mcap,
+        "pe": _ratio(mcap, fy["net_income"]),
+        "pb": _ratio(mcap, equity),
+        "p_cf": _ratio(mcap, fy["cfo"]),
+        "p_fcf": _ratio(mcap, fy["fcf"]),
+        "ev": ev,
+        "ev_to_sales": _ratio(ev, fy["revenue"]),
+    }
+
+
 def market_multiples(ticker: str, last: pd.Series) -> pd.DataFrame:
+    """Today's market cap against the latest fiscal year."""
     import yfinance as yf
 
     info = yf.Ticker(ticker).info or {}
@@ -313,30 +403,54 @@ def market_multiples(ticker: str, last: pd.Series) -> pd.DataFrame:
     if not mcap:
         raise RuntimeError("yfinance returned no marketCap")
     price = info.get("currentPrice") or info.get("regularMarketPrice")
-
-    equity = last.get("equity") or (last["total_assets"] - last["total_liabilities"])
-    ni, cfo, fcf, rev = last["net_income"], last["cfo"], last["fcf"], last["revenue"]
-    cash = last["cash"] if pd.notna(last.get("cash")) else 0.0
-    debt = last["total_debt"] if pd.notna(last.get("total_debt")) else 0.0
-    ev = mcap + debt - cash
-
-    def ratio(num: float, den: float) -> float | None:
-        if den is None or pd.isna(den) or den == 0:
-            return None
-        return num / den
-
-    row = {
-        "price": price,
-        "market_cap": mcap,
-        "fy_label": int(last.name),
-        "pe": ratio(mcap, ni),
-        "pb": ratio(mcap, equity),
-        "p_cf": ratio(mcap, cfo),
-        "p_fcf": ratio(mcap, fcf),
-        "ev": ev,
-        "ev_to_sales": ratio(ev, rev),
-    }
+    row = {"price": price, "fy_label": int(last.name), **_multiples(float(mcap), last)}
     return pd.DataFrame([row])
+
+
+def _tz_naive(s: pd.Series) -> pd.Series:
+    if isinstance(s.index, pd.DatetimeIndex) and s.index.tz is not None:
+        s = s.copy()
+        s.index = s.index.tz_localize(None)
+    return s
+
+
+def historical_multiples(ticker: str, df: pd.DataFrame) -> pd.DataFrame:
+    """Per fiscal year: close on the fiscal year-end date × SEC diluted shares.
+
+    yfinance prices are split-adjusted to today's share basis; SEC share counts are on the
+    basis of their filing date, so each count is scaled by the splits that happened after it
+    was filed.
+    """
+    import yfinance as yf
+
+    ends = df["fy_end"].dropna()
+    if ends.empty:
+        raise RuntimeError("SEC returned no fiscal year-end dates")
+    t = yf.Ticker(ticker)
+    hist = t.history(start=ends.min() - pd.Timedelta(days=10), auto_adjust=False)
+    if hist.empty:
+        raise RuntimeError("yfinance returned no price history")
+    close = _tz_naive(hist["Close"])
+    splits = _tz_naive(t.splits)
+
+    rows = {}
+    for fy, r in df.iterrows():
+        end, shares, filed = r.get("fy_end"), r.get("shares_diluted"), r.get("shares_filed")
+        if pd.isna(end) or pd.isna(shares):
+            continue
+        px = close.loc[:end]
+        if px.empty:
+            continue
+        factor = 1.0
+        if len(splits) and pd.notna(filed):
+            factor = float(splits[splits.index > filed].prod())
+        price = float(px.iloc[-1])
+        rows[fy] = {"fy_end": end.date(), "price": price, **_multiples(price * shares * factor, r)}
+    if not rows:
+        raise RuntimeError("no fiscal year had both a share count and a price")
+    out = pd.DataFrame.from_dict(rows, orient="index")
+    out.index.name = df.index.name
+    return out
 
 
 def _fmt_pct_table(df: pd.DataFrame) -> pd.DataFrame:
@@ -371,6 +485,20 @@ def _format_metric_value(key: str, value) -> str:
     return f"{value:,.2f}"
 
 
+def _print_history_table(hist: pd.DataFrame) -> None:
+    print("  Price = split-adjusted close on the fiscal year-end date; market cap = price × SEC")
+    print("  diluted shares; denominators from that same fiscal year.\n")
+    view = hist.copy()
+    for col in view.columns:
+        if col == "price":
+            view[col] = view[col].map(lambda v: f"${v:,.2f}")
+        elif col in ("market_cap", "ev"):
+            view[col] = view[col].map(lambda v: f"${v / 1e9:,.0f}B" if pd.notna(v) else "n/a")
+        elif col != "fy_end":
+            view[col] = view[col].map(lambda v: f"{v:,.1f}×" if v is not None and pd.notna(v) else "n/a")
+    print(view.rename(columns=HISTORY_LABELS).to_string())
+
+
 def _print_valuation_block(row: pd.Series, fy: int) -> None:
     order = [
         "price",
@@ -394,7 +522,7 @@ def _print_valuation_block(row: pd.Series, fy: int) -> None:
 def main() -> None:
     args = parse_args(sys.argv[1:])
     for ticker in [s.upper() for s in args.symbols]:
-        df = add_ratios(fetch_annual(ticker))
+        df = screen(ticker, args.years)
         last = df.iloc[-1]
 
         print(f"\n=== {ticker} — last {len(df)} fiscal years — SEC EDGAR ===")
@@ -425,9 +553,16 @@ def main() -> None:
             continue
 
         try:
+            hist = historical_multiples(ticker, df)
+            print(f"\n=== {ticker} — valuation multiples per fiscal year ===")
+            _print_history_table(hist)
+        except Exception as exc:
+            print(f"\n[yfinance] could not compute historical multiples: {exc}")
+
+        try:
             m = market_multiples(ticker, last)
             row = m.iloc[0]
-            print(f"\n=== {ticker} — valuation multiples ===")
+            print(f"\n=== {ticker} — valuation multiples today ===")
             _print_valuation_block(row, int(last.name))
         except Exception as exc:
             print(f"\n[yfinance] could not compute multiples: {exc}")
