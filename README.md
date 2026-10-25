@@ -3,6 +3,8 @@
 Each script fetches free market data, computes the indicator of its chapter and prints a short verdict.
 The book's [CODE] Hands-On section of every chapter explains the script and shows its main function as Listing N.1.
 
+**Reference:** [Valuation and profitability ratios](valuation_and_profitability_ratios.md) (Chapter 4 definitions; ties to `ch02_stock_screen.py`).
+
 ## Install once (Chapter 1, Section 1.6)
 
 ```bash
@@ -11,7 +13,7 @@ cd pyton-for-traders/handson
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-python run_selftests.py            # every script on offline sample data -> 12/12 passed
+python run_selftests.py            # every script on offline sample data -> 13/13 passed
 ```
 
 ## Run
@@ -26,7 +28,8 @@ python ch10_ma_bands.py BTC-USD    # live data (Yahoo Finance; add --kraken in c
 | Ch | Script | What it prints | Live example | Needs |
 |---|---|---|---|---|
 | 1 | `ch01_asset_classes.py` | return, volatility, drawdown, correlation to stocks per asset class | `python ch01_asset_classes.py` | — |
-| 2 | `ch02_stock_screen.py` | debt ratio, coverage, cash conversion ratio, cycle P/E, fair price, stage | `python ch02_stock_screen.py NVDA KO` | `SEC_USER_AGENT` for 7 years |
+| 1 | `ch01_ohlc.py` | daily open, high, low, close, volume from Yahoo | `python ch01_ohlc.py` (default AAPL) | — |
+| 2 | `ch02_stock_screen.py` | SEC 7y fundamentals, margins, valuation multiples, stock screen stage | `python ch02_stock_screen.py` (default AAPL) | `SEC_USER_AGENT` for 7 years |
 | 3 | `ch03_stock_bond.py` | 30/90-day stock/bond correlation, regime | `python ch03_stock_bond.py SPY TLT` | — |
 | 4 | `ch04_etf_cost.py` | spread, RTC, cost over N years, trade hurdle | `python ch04_etf_cost.py CSPX.L --ter 0.07` | TER from the factsheet; market hours |
 | 5 | `ch05_futures_risk.py` | ATR stop, contracts allowed by the 2% rule, leverage | `python ch05_futures_risk.py GC=F --point-value 10` | contract point value |

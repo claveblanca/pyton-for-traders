@@ -9,9 +9,14 @@ import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent
+# Live SEC only — no offline --demo
+SKIP_DEMO = {"ch02_stock_history.py"}
 scripts = sorted(ROOT.glob("ch*.py"))
 failed: list[pathlib.Path] = []
 for p in scripts:
+    if p.name in SKIP_DEMO:
+        print(f"SKIP {p.name} (live SEC only; set SEC_USER_AGENT to run manually)")
+        continue
     r = subprocess.run(
         [sys.executable, str(p), "--demo"],
         capture_output=True,
