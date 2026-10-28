@@ -399,15 +399,50 @@ if __name__ == "__main__":
         sys.exit(0)
 
     symbol = a.symbols[0]
+    spread_note = ""
+    bid: float | None = None
+    ask: float | None = None
     if a.demo:
         s = 0.06
     else:
-        s = spread_pct(symbol, estimate=estimate)
-    show(
-        {
-            "spread_pct": round(s, 3),
-            "rtc_pct_1y": round(rtc(a.ter, s), 2),
-            f"cost_eur_{a.years:g}y": round(cost_eur(a.amount, a.ter, s, a.years)),
-            "trade_hurdle_pct": round(hurdle(s), 1),
+        import yfinance as yf
+
+        info = yf.Ticker(symbol).info
+        s, spread_note = quote_spread(symbol, estimate=estimate, info=info)
+        if s is None:
+            raise SystemExit(f"{symbol}: could not compute spread")
+        raw_bid, raw_ask = info.get("bid"), info.get("ask")
+        if _valid_bid_ask(raw_bid, raw_ask):
+            bid, ask = float(raw_bid), float(raw_ask)
+
+    cost_col = f"cost_eur_{a.years:g}y"
+    years_label = f"{a.years:g}".rstrip("0").rstrip(".")
+    title = f"{symbol}  ·  TER {a.ter:g} %  ·  €{a.amount:,.0f} over {years_label}y"
+    if a.demo:
+        title += "  (demo spread)"
+
+    rows: dict[str, object] = {
+        "spread_pct": round(s, 3),
+        "rtc_pct_1y": round(rtc(a.ter, s), 2),
+        cost_col: round(cost_eur(a.amount, a.ter, s, a.years)),
+        "trade_hurdle_pct": round(hurdle(s), 1),
+    }
+    row_labels = {
+        "spread_pct": "Spread (1-way)",
+        "rtc_pct_1y": "RTC (1y)",
+        cost_col: f"Total cost ({years_label}y)",
+        "trade_hurdle_pct": "Trade hurdle",
+    }
+    if bid is not None and ask is not None:
+        rows = {
+            "bid": bid,
+            "ask": ask,
+            **rows,
         }
-    )
+        row_labels["bid"] = "Bid"
+        row_labels["ask"] = "Ask"
+
+    note_parts = ["RTC = TER + 2×spread; hurdle = 5× round-trip spread."]
+    if spread_note:
+        note_parts.insert(0, spread_note + ".")
+    show(rows, note=" ".join(note_parts), title=title, labels=row_labels)

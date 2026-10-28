@@ -8,10 +8,11 @@ Requires:
     pip install yfinance   # for P/E, P/B, EV/Sales, etc. (skip with --no-yfinance)
 
 Run from the repo root:
-    python ch02_stock_screen.py              # default AAPL
-    python ch02_stock_screen.py NVDA MSFT
+    python ch02_stock_screen.py              # default AAPL (profitability + valuation by FY + today)
+    python ch02_stock_screen.py NVDA MSFT   # full SEC tables + historical multiples
     python ch02_stock_screen.py AAPL --years 10
     python ch02_stock_screen.py AAPL --no-yfinance
+    python ch02_stock_screen.py AAPL --full # raw SEC line items + per-FY valuation history
 """
 from __future__ import annotations
 
@@ -229,6 +230,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--no-yfinance",
         action="store_true",
         help="skip market multiples (P/E, EV/Sales, …)",
+    )
+    p.add_argument(
+        "--full",
+        action="store_true",
+        help="include raw SEC line items and historical valuation multiples (default for one ticker: profitability + today only)",
     )
     return p.parse_args(argv)
 
@@ -485,17 +491,44 @@ def _format_metric_value(key: str, value) -> str:
     return f"{value:,.2f}"
 
 
-def _print_history_table(hist: pd.DataFrame) -> None:
-    print("  Price = split-adjusted close on the fiscal year-end date; market cap = price × SEC")
-    print("  diluted shares; denominators from that same fiscal year.\n")
+def _append_today_valuation_row(hist: pd.DataFrame, today: pd.Series) -> pd.DataFrame:
+    data: dict[str, object] = {"fy_end": "live"}
+    for col in hist.columns:
+        if col == "fy_end":
+            continue
+        data[col] = today.get(col)
+    return pd.concat([hist, pd.DataFrame([data], index=["Today"])])
+
+
+def _print_history_table(
+    hist: pd.DataFrame,
+    *,
+    today_fy: int | None = None,
+) -> None:
+    has_live = (hist.index == "Today").any() if len(hist) else False
+    print(
+        "  Fiscal years: price = split-adjusted close on the FY-end date; market cap = price × SEC"
+    )
+    print("  diluted shares; multiples use that same fiscal year's fundamentals.")
+    if has_live and today_fy is not None:
+        print(
+            f"  Today: live price and market cap from Yahoo; multiples vs SEC fiscal year {today_fy}."
+        )
+    print()
     view = hist.copy()
     for col in view.columns:
-        if col == "price":
-            view[col] = view[col].map(lambda v: f"${v:,.2f}")
+        if col == "fy_end":
+            view[col] = view[col].map(
+                lambda v: "(live)" if v == "live" else (v if isinstance(v, str) else v)
+            )
+        elif col == "price":
+            view[col] = view[col].map(lambda v: f"${v:,.2f}" if pd.notna(v) else "n/a")
         elif col in ("market_cap", "ev"):
             view[col] = view[col].map(lambda v: f"${v / 1e9:,.0f}B" if pd.notna(v) else "n/a")
-        elif col != "fy_end":
-            view[col] = view[col].map(lambda v: f"{v:,.1f}×" if v is not None and pd.notna(v) else "n/a")
+        else:
+            view[col] = view[col].map(
+                lambda v: f"{v:,.1f}×" if v is not None and pd.notna(v) else "n/a"
+            )
     print(view.rename(columns=HISTORY_LABELS).to_string())
 
 
@@ -519,53 +552,100 @@ def _print_valuation_block(row: pd.Series, fy: int) -> None:
         print(f"    Value: {_format_metric_value(key, val)}\n")
 
 
+_VALUATION_TODAY_KEYS = [
+    "price",
+    "market_cap",
+    "pe",
+    "pb",
+    "p_cf",
+    "p_fcf",
+    "ev",
+    "ev_to_sales",
+]
+
+
+def _print_valuation_today_table(row: pd.Series, fy: int) -> None:
+    """One-row table: today's market data vs latest SEC fiscal year denominators."""
+    cells = {
+        HISTORY_LABELS[k]: _format_metric_value(k, row.get(k)) for k in _VALUATION_TODAY_KEYS
+    }
+    print(f"  Market data today; P/E, P/B, EV/Sales, etc. use SEC fiscal year {fy}.\n")
+    print(pd.DataFrame([cells]).to_string(index=False))
+
+
+def _print_profitability_table(ticker: str, df: pd.DataFrame, *, guide: bool) -> None:
+    ratio_keys = RATIO_COLS + ["total_debt"]
+    print(f"\n=== {ticker} — profitability & cash flow (per fiscal year) ===")
+    if guide:
+        _print_metric_guide(RATIO_HELP, ratio_keys)
+    ratio_view = _fmt_pct_table(df[ratio_keys])
+    ratio_view = ratio_view.rename(
+        columns={k: RATIO_HELP[k][0] for k in ratio_keys if k in RATIO_HELP}
+    )
+    for col in ratio_view.columns:
+        if "FCF" in col or "debt" in col.lower():
+            ratio_view[col] = ratio_view[col].map(
+                lambda x: f"${x:,.0f}" if pd.notna(x) else "n/a"
+            )
+        elif "%" in col:
+            ratio_view[col] = ratio_view[col].map(
+                lambda x: f"{x:.2f}" if pd.notna(x) else "n/a"
+            )
+    print(ratio_view.to_string())
+
+
 def main() -> None:
     args = parse_args(sys.argv[1:])
-    for ticker in [s.upper() for s in args.symbols]:
+    tickers = [s.upper() for s in args.symbols]
+    compact = len(tickers) == 1 and not args.full
+
+    for ticker in tickers:
         df = screen(ticker, args.years)
         last = df.iloc[-1]
 
-        print(f"\n=== {ticker} — last {len(df)} fiscal years — SEC EDGAR ===")
-        print("  Raw line items from annual 10-K XBRL (USD).\n")
-        sec_view = df[SEC_FIELDS].round(2).rename(columns=SEC_LABELS)
-        print(sec_view.to_string())
+        if not compact:
+            print(f"\n=== {ticker} — last {len(df)} fiscal years — SEC EDGAR ===")
+            print("  Raw line items from annual 10-K XBRL (USD).\n")
+            sec_view = df[SEC_FIELDS].round(2).rename(columns=SEC_LABELS)
+            print(sec_view.to_string())
 
-        ratio_keys = RATIO_COLS + ["total_debt"]
-        print(f"\n=== {ticker} — profitability & cash flow (per fiscal year) ===")
-        _print_metric_guide(RATIO_HELP, ratio_keys)
-        ratio_view = _fmt_pct_table(df[ratio_keys])
-        ratio_view = ratio_view.rename(
-            columns={k: RATIO_HELP[k][0] for k in ratio_keys if k in RATIO_HELP}
-        )
-        for col in ratio_view.columns:
-            if "FCF" in col or "debt" in col.lower():
-                ratio_view[col] = ratio_view[col].map(
-                    lambda x: f"${x:,.0f}" if pd.notna(x) else "n/a"
-                )
-            elif "%" in col:
-                ratio_view[col] = ratio_view[col].map(
-                    lambda x: f"{x:.2f}" if pd.notna(x) else "n/a"
-                )
-        print(ratio_view.to_string())
+        _print_profitability_table(ticker, df, guide=not compact)
 
         if args.no_yfinance:
             print("\n(market multiples skipped: --no-yfinance)")
             continue
 
+        hist: pd.DataFrame | None = None
         try:
             hist = historical_multiples(ticker, df)
-            print(f"\n=== {ticker} — valuation multiples per fiscal year ===")
-            _print_history_table(hist)
         except Exception as exc:
             print(f"\n[yfinance] could not compute historical multiples: {exc}")
 
+        today_row: pd.Series | None = None
         try:
-            m = market_multiples(ticker, last)
-            row = m.iloc[0]
-            print(f"\n=== {ticker} — valuation multiples today ===")
-            _print_valuation_block(row, int(last.name))
+            today_row = market_multiples(ticker, last).iloc[0]
         except Exception as exc:
-            print(f"\n[yfinance] could not compute multiples: {exc}")
+            print(f"\n[yfinance] could not compute multiples today: {exc}")
+
+        if hist is not None or today_row is not None:
+            title = (
+                f"\n=== {ticker} — valuation multiples ==="
+                if compact
+                else f"\n=== {ticker} — valuation multiples per fiscal year ==="
+            )
+            if hist is not None:
+                print(title)
+                view = hist
+                if compact and today_row is not None:
+                    view = _append_today_valuation_row(hist, today_row)
+                _print_history_table(view, today_fy=int(last.name) if compact else None)
+            elif compact and today_row is not None:
+                print(f"\n=== {ticker} — valuation multiples today ===")
+                _print_valuation_today_table(today_row, int(last.name))
+
+        if not compact and today_row is not None:
+            print(f"\n=== {ticker} — valuation multiples today (detail) ===")
+            _print_valuation_block(today_row, int(last.name))
 
 
 if __name__ == "__main__":
