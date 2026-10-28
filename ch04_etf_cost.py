@@ -15,6 +15,8 @@ Run from the repo root:
     python ch04_etf_cost.py --list-by-listing --listing PA
     python ch04_etf_cost.py --list-by-listing --listing MI --limit 50
     python ch04_etf_cost.py --list-exchanges
+    python ch04_etf_cost.py --list-by-listing --listing DE --hedge unhedged
+    python ch04_etf_cost.py --list-by-listing --listing DE --amundi --hedge hedged
 """
 from __future__ import annotations
 
@@ -30,7 +32,12 @@ import pandas as pd
 
 from common import show
 from common.amundi_etfs import demo_amundi_etfs
-from common.justetf_catalog import demo_list_by_listing, etfs_on_listing
+from common.justetf_catalog import (
+    HedgeFilter,
+    demo_list_by_listing,
+    etfs_on_listing,
+    filter_by_hedge,
+)
 from common.justetf_listings import available_exchanges, yahoo_symbol_for_listing
 
 
@@ -116,13 +123,18 @@ def sort_by_ter(df: pd.DataFrame) -> pd.DataFrame:
     return df.sort_values("ter", ascending=True, na_position="last").reset_index(drop=True)
 
 
-def list_amundi_etfs(*, demo: bool = False, include_active: bool = True) -> pd.DataFrame:
+def list_amundi_etfs(
+    *,
+    demo: bool = False,
+    include_active: bool = True,
+    hedge: HedgeFilter = "any",
+) -> pd.DataFrame:
     """Retrieve Amundi ETF symbols and TER from justETF (or offline demo rows)."""
     from common.amundi_etfs import amundi_etfs
 
     if demo:
-        return demo_amundi_etfs()
-    return amundi_etfs(include_active=include_active)
+        return filter_by_hedge(demo_amundi_etfs(), hedge)
+    return amundi_etfs(include_active=include_active, hedge=hedge)
 
 
 def list_catalog_by_listing(
@@ -277,6 +289,12 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="print venues supported by --listing and --list-by-listing",
     )
+    p.add_argument(
+        "--hedge",
+        choices=("any", "hedged", "unhedged"),
+        default="any",
+        help="currency-hedged share class filter for --list-by-listing and --amundi",
+    )
     return p.parse_args()
 
 
@@ -318,7 +336,7 @@ if __name__ == "__main__":
 
     if a.list_by_listing:
         if a.demo:
-            table = demo_list_by_listing(a.listing)
+            table = demo_list_by_listing(a.listing, hedge=a.hedge)
             skipped = 0
         else:
             try:
@@ -327,6 +345,7 @@ if __name__ == "__main__":
                     a.listing,
                     provider=provider,
                     include_active=not a.no_active,
+                    hedge=a.hedge,
                 )
             except ValueError as e:
                 raise SystemExit(str(e)) from e
@@ -334,20 +353,24 @@ if __name__ == "__main__":
         table = sort_by_ter(table)
         if a.limit and a.limit > 0:
             table = table.head(a.limit)
-        cols = ["yahoo", "isin", "screener", "ter", "name", "note"]
+        cols = ["yahoo", "isin", "screener", "ter", "hedged", "currency", "name", "note"]
+        cols = [c for c in cols if c in table.columns]
         if len(table):
             print(table[cols].to_string(index=False))
         else:
             print("(no rows — empty catalog or unknown listing)")
         scope = "Amundi " if a.amundi else ""
-        tail = f"\n{len(table)} {scope}ETFs on listing {a.listing!r}"
+        hedge_note = "" if a.hedge == "any" else f", hedge={a.hedge}"
+        tail = f"\n{len(table)} {scope}ETFs on listing {a.listing!r}{hedge_note}"
         if skipped:
             tail += f"; {skipped} skipped (no symbol on venue)"
         print(tail)
         sys.exit(0)
 
     if a.amundi:
-        catalog = list_amundi_etfs(demo=a.demo, include_active=not a.no_active)
+        catalog = list_amundi_etfs(
+            demo=a.demo, include_active=not a.no_active, hedge=a.hedge
+        )
         table, skipped = etf_cost_table(
             catalog,
             amount=a.amount,
